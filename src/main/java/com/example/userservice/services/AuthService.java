@@ -1,11 +1,15 @@
 package com.example.userservice.services;
 
+import com.example.userservice.Clients.KafkaProducerClient;
+import com.example.userservice.dto.SendEmailMessageDto;
 import com.example.userservice.dto.UserDto;
 import com.example.userservice.model.Session;
 import com.example.userservice.model.SessionStatus;
 import com.example.userservice.model.User;
 import com.example.userservice.repository.SessionRepository;
 import com.example.userservice.repository.UserRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
@@ -32,12 +36,16 @@ public class AuthService {
     private UserRepository userRepository;
     private SessionRepository sessionRepository;
     private BCryptPasswordEncoder bCryptPasswordEncoder;
+    private KafkaProducerClient kafkaProducerClient;
+    private ObjectMapper objectMapper;
 
     public AuthService(UserRepository userRepository, SessionRepository sessionRepository,
-                       BCryptPasswordEncoder bCryptPasswordEncoder) {
+                       BCryptPasswordEncoder bCryptPasswordEncoder, KafkaProducerClient kafkaProducerClient, ObjectMapper objectMapper) {
         this.userRepository = userRepository;
         this.sessionRepository = sessionRepository;
         this.bCryptPasswordEncoder = bCryptPasswordEncoder;
+        this.kafkaProducerClient = kafkaProducerClient;
+        this.objectMapper = objectMapper;
     }
 
     public ResponseEntity<UserDto> login(String email, String password) {
@@ -114,13 +122,28 @@ public class AuthService {
     }
 
     public UserDto signUp(String email, String password) {
-        User user = new User();
-        user.setEmail(email);
-        user.setPassword(bCryptPasswordEncoder.encode(password)); // encrypt
-
-        User savedUser = userRepository.save(user);
-
-        return UserDto.from(savedUser);
+        Optional<User> userOptional = userRepository.findByEmail(email);
+        if(userOptional.isEmpty()) {
+            User user = new User();
+            user.setEmail(email);
+            user.setPassword(bCryptPasswordEncoder.encode(password)); // encrypt
+            User savedUser = userRepository.save(user);
+            return UserDto.from(savedUser);
+        }
+        UserDto userDto = new UserDto();
+        userDto.setEmail(email);
+        //put message in queue
+        try {
+            SendEmailMessageDto sendEmailMessageDto = new SendEmailMessageDto();
+            sendEmailMessageDto.setTo(email);
+            sendEmailMessageDto.setFrom("allamsrisowmya@gmail.com");
+            sendEmailMessageDto.setSubject("Kafka Userservice Testing");
+            sendEmailMessageDto.setBody("Demo");
+            kafkaProducerClient.sendMessage("sendEmail",objectMapper.writeValueAsString(userDto));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
+        return UserDto.from(userOptional.get());
     }
 
     public SessionStatus validate(String token, Long userId) {
